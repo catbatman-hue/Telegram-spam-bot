@@ -24,10 +24,13 @@ updater.start_webhook(
     url_path=TOKEN
 )
 
-# Set webhook URL
-updater.bot.set_webhook(APP_URL + "/" + TOKEN, port=443)
+updater.bot.set_webhook(APP_URL + "/" + TOKEN)
 
-updater.idle()
+# Set webhook URL
+updater.bot.set_webhook(
+    url=APP_URL + "/" + TOKEN,
+    port=443
+)
 
 # === CONFIGURATION ===
 BOT_TOKEN = "8123613122:AAEWLMbOSMJEoW1VVlDTfaBTG-ec6cf_PoQ"
