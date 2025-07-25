@@ -1,8 +1,33 @@
 import logging
 import re
 from telegram import Update, ChatPermissions
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-from collections import defaultdict
+from telegram.ext import Updater, CommandHandler
+import os
+
+# Get environment variables
+TOKEN = os.getenv("BOT_TOKEN") or "8123613122:AAEWLMbOSMJEoW1VVlDTfaBTG-ec6cf_PoQ"
+APP_URL = os.getenv("APP_URL") or "https://Telegram-spam-bot-1.onrender.com"
+
+updater = Updater(token=TOKEN, use_context=True)
+dispatcher = updater.dispatcher
+
+# Basic command to confirm it's working
+def start(update, context):
+    update.message.reply_text("Webhook bot is now live!")
+
+dispatcher.add_handler(CommandHandler("start", start))
+
+# Start webhook listener
+updater.start_webhook(
+    listen="0.0.0.0",
+    port=8080,
+    url_path=TOKEN
+)
+
+# Set webhook URL
+updater.bot.set_webhook(APP_URL + "/" + TOKEN)
+
+updater.idle()
 
 # === CONFIGURATION ===
 BOT_TOKEN = "8123613122:AAEWLMbOSMJEoW1VVlDTfaBTG-ec6cf_PoQ"
