@@ -25,7 +25,7 @@ updater.start_webhook(
 )
 
 # Set webhook URL
-updater.bot.set_webhook(APP_URL + "/" + TOKEN)
+updater.bot.set_webhook(APP_URL + "/" + TOKEN, port=443)
 
 updater.idle()
 
