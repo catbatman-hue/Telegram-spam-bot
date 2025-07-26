@@ -121,7 +121,8 @@ def set_webhook():
 
 if __name__ == "__main__":
     Thread(target=run).start()
-    set_webhook()    print("Webhook set:", success)
+    set_webhook()   
+    print("Webhook set:", success)
 
 updater.bot.set_webhook(APP_URL + "/" + TOKEN)
 
