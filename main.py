@@ -2,37 +2,135 @@ import os
 from flask import Flask, request
 from threading import Thread
 from telegram import Update, ChatPermissions
-from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters, CallbackContext
-)
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+import logging
 
 TOKEN = os.getenv("BOT_TOKEN")
-APP_URL = os.getenv("APP_URL")  # e.g. https://your-app-name.onrender.com
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6871731402"))  # Your Telegram ID
+PORT = int(os.environ.get("PORT", 10000))
+
+# Memory store
+whitelist = set()
+blacklist = set()
+spam_count = {}
+pending_action = {}  # Tracks admin reply waiting
+
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
-ADMIN_ID = 6871731402  # Your Telegram ID
+# Admin check
+def is_admin(user_id):
+    return user_id == ADMIN_ID
 
-whitelist = set()
-blacklist = set()
-awaiting_command = {}  # user_id: command
-spam_tracker = {}  # user_id: offense_count
+# Command starter
+def request_target(update: Update, context: CallbackContext, action: str):
+    if not is_admin(update.effective_user.id):
+        return update.message.reply_text("❌ You're not authorized.")
+    pending_action[update.effective_user.id] = action
+    update.message.reply_text(f"Please reply to the user you want to *{action}*", parse_mode="Markdown")
 
-# --- Admin-only check ---
-def admin_only(func):
-    def wrapper(update: Update, context: CallbackContext):
-        if update.effective_user.id != ADMIN_ID:
-            update.message.reply_text("🚫 You don't have permission to use this.")
-            return
-        return func(update, context)
-    return wrapper
+# Reply handler
+def perform_action(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    if user_id not in pending_action:
+        return
+    action = pending_action.pop(user_id)
+    if not update.message.reply_to_message:
+        return update.message.reply_text("❌ You must reply to a user's message.")
 
-# --- Command base ---
-def ask_for_target(update: Update, context: CallbackContext, command: str):
-    update.message.reply_text(f"Who do you want to {command}? Tag or reply to the user.")
-    awaiting_command[update.effective_user.id] = command
+    target = update.message.reply_to_message.from_user
+    tid = target.id
+
+    if action == "whitelist":
+        whitelist.add(tid)
+        update.message.reply_text(f"✅ {target.first_name} whitelisted.")
+    elif action == "blacklist":
+        blacklist.add(tid)
+        update.message.reply_text(f"⚠️ {target.first_name} blacklisted.")
+    elif action == "unlist":
+        whitelist.discard(tid)
+        blacklist.discard(tid)
+        update.message.reply_text(f"✅ {target.first_name} removed from all lists.")
+    elif action == "ban":
+        try:
+            context.bot.kick_chat_member(update.effective_chat.id, tid)
+            update.message.reply_text(f"🚫 {target.first_name} banned.")
+        except Exception as e:
+            update.message.reply_text(f"❌ Ban failed: {e}")
+    elif action == "suspend":
+        try:
+            context.bot.restrict_chat_member(update.effective_chat.id, tid, ChatPermissions(can_send_messages=False))
+            update.message.reply_text(f"⛔ {target.first_name} suspended.")
+        except Exception as e:
+            update.message.reply_text(f"❌ Suspend failed: {e}")
+    elif action == "removed":
+        try:
+            context.bot.kick_chat_member(update.effective_chat.id, tid)
+            update.message.reply_text(f"❌ {target.first_name} removed.")
+        except Exception as e:
+            update.message.reply_text(f"❌ Remove failed: {e}")
+
+# Spam monitor
+def handle_spam(update: Update, context: CallbackContext):
+    user = update.effective_user
+    if user.id in whitelist:
+        return
+    text = update.message.text.lower()
+    if update.message.forward_from or "http" in text or "www" in text:
+        spam_count[user.id] = spam_count.get(user.id, 0) + 1
+        count = spam_count[user.id]
+
+        try:
+            update.message.delete()
+        except:
+            pass
+
+        if count >= 5:
+            try:
+                context.bot.kick_chat_member(update.effective_chat.id, user.id)
+                update.message.reply_text(f"🚫 {user.first_name} removed for spam.")
+            except:
+                pass
+        else:
+            update.message.reply_text(f"⚠️ Spam detected. {count}/5 warnings.")
+
+# Basic commands
+dispatcher.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("🤖 Bot is active!")))
+
+# Admin commands
+for cmd in ["whitelist", "blacklist", "ban", "suspend", "unlist", "removed"]:
+    dispatcher.add_handler(CommandHandler(cmd, lambda u, c, cmd=cmd: request_target(u, c, cmd)))
+
+dispatcher.add_handler(MessageHandler(Filters.reply & Filters.group, perform_action))
+dispatcher.add_handler(MessageHandler(Filters.text & Filters.group, handle_spam))
+
+# Flask webhook
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), updater.bot)
+    dispatcher.process_update(update)
+    return "ok"
+
+@app.route("/")
+def index():
+    return "Running ✅"
+
+def run():
+    app.run(host="0.0.0.0", port=PORT)
+
+def set_webhook():
+    url = os.getenv("APP_URL") or f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
+    success = updater.bot.set_webhook(url)
+    print("Webhook set:", success)
+
+if __name__ == "__main__":
+    Thread(target=run).start()
+    set_webhook()    awaiting_command[update.effective_user.id] = command
 
 # --- Admin Commands ---
 @admin_only
