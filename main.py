@@ -116,18 +116,16 @@ def set_webhook():
     return success
     
 def set_webhook():
-    hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
-    if not hostname:
-        print("❌ Webhook setup failed: No hostname.")
-        return
-    url = f"https://{hostname}/{TOKEN}"
-    updater.bot.set_webhook(url)
-    print("✅ Webhook set:", url)
+    print("Setting webhook...")
+    app_url = os.getenv("APP_URL") or f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
+    full_url = f"{app_url}/{TOKEN}"
+    success = updater.bot.set_webhook(full_url)
+    return success
 
 if __name__ == "__main__":
     Thread(target=run).start()
     success = set_webhook()
-print("Webhook set:", success)
+    print("Webhook set:", success)
 
 updater.bot.set_webhook(APP_URL + "/" + TOKEN)
 
