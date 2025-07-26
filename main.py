@@ -1,30 +1,131 @@
-import logging
-import re
-from telegram import Update, ChatPermissions
-from telegram.ext import Updater, CommandHandler
 import os
+from flask import Flask, request
+from threading import Thread
+from telegram import Update, ChatPermissions
+from telegram.ext import Updater, CommandHandler, CallbackContext
+import telegram
 
-# Get environment variables
+# --- CONFIG ---
 TOKEN = os.getenv("BOT_TOKEN") or "8123613122:AAEWLMbOSMJEoW1VVlDTfaBTG-ec6cf_PoQ"
-APP_URL = os.getenv("APP_URL") or "https://Telegram-spam-bot-1.onrender.com"
+ADMIN_ID = 6871731402
+PORT = int(os.environ.get("PORT", 8080))
 
-updater = Updater(token=TOKEN, use_context=True)
+# Whitelist/Blacklist in memory (use database in production)
+whitelist = set()
+blacklist = set()
+
+# --- FLASK SERVER ---
+app = Flask(__name__)
+updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
-# Basic command to confirm it's working
-def start(update, context):
-    update.message.reply_text("Webhook bot is now live!")
+# --- COMMANDS ---
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("🤖 Spam Bot is active. Use /whitelist, /blacklist etc.")
 
+def whitelist_cmd(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return update.message.reply_text("❌ You're not authorized.")
+    try:
+        user_id = int(context.args[0])
+        whitelist.add(user_id)
+        update.message.reply_text(f"✅ Whitelisted user: {user_id}")
+    except:
+        update.message.reply_text("❌ Usage: /whitelist <user_id>")
+
+def blacklist_cmd(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return update.message.reply_text("❌ You're not authorized.")
+    try:
+        user_id = int(context.args[0])
+        blacklist.add(user_id)
+        update.message.reply_text(f"⛔ Blacklisted user: {user_id}")
+    except:
+        update.message.reply_text("❌ Usage: /blacklist <user_id>")
+
+def unlist_cmd(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return update.message.reply_text("❌ You're not authorized.")
+    try:
+        user_id = int(context.args[0])
+        whitelist.discard(user_id)
+        blacklist.discard(user_id)
+        update.message.reply_text(f"🧹 Removed user {user_id} from all lists.")
+    except:
+        update.message.reply_text("❌ Usage: /unlist <user_id>")
+
+def removed_cmd(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return update.message.reply_text("❌ You're not authorized.")
+    try:
+        user_id = int(context.args[0])
+        context.bot.kick_chat_member(chat_id=update.effective_chat.id, user_id=user_id)
+        update.message.reply_text(f"🚫 Removed user: {user_id}")
+    except:
+        update.message.reply_text("❌ Failed to remove. Usage: /removed <user_id>")
+
+def ban_cmd(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return update.message.reply_text("❌ You're not authorized.")
+    try:
+        user_id = int(context.args[0])
+        context.bot.ban_chat_member(chat_id=update.effective_chat.id, user_id=user_id)
+        update.message.reply_text(f"🔨 Banned user: {user_id}")
+    except:
+        update.message.reply_text("❌ Failed to ban. Usage: /ban <user_id>")
+
+def suspend_cmd(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return update.message.reply_text("❌ You're not authorized.")
+    try:
+        user_id = int(context.args[0])
+        permissions = ChatPermissions(can_send_messages=False)
+        context.bot.restrict_chat_member(chat_id=update.effective_chat.id, user_id=user_id, permissions=permissions)
+        update.message.reply_text(f"🛑 Suspended user: {user_id}")
+    except:
+        update.message.reply_text("❌ Failed to suspend. Usage: /suspend <user_id>")
+
+# --- REGISTER COMMANDS ---
 dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("whitelist", whitelist_cmd))
+dispatcher.add_handler(CommandHandler("blacklist", blacklist_cmd))
+dispatcher.add_handler(CommandHandler("unlist", unlist_cmd))
+dispatcher.add_handler(CommandHandler("removed", removed_cmd))
+dispatcher.add_handler(CommandHandler("ban", ban_cmd))
+dispatcher.add_handler(CommandHandler("suspend", suspend_cmd))
 
-# Start webhook listener
-updater.start_webhook(
-    listen="0.0.0.0",
-    port=8080,
-    url_path=TOKEN
-)
+# --- WEBHOOK HANDLER ---
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    updater.bot.process_new_updates([
+        telegram.Update.de_json(request.get_json(force=True), updater.bot)
+    ])
+    return "ok"
+
+@app.route("/")
+def home():
+    return "✅ Bot is alive!"
+
+# --- FLASK + WEBHOOK ---
+def run():
+    app.run(host="0.0.0.0", port=PORT)
+
+def set_webhook():
+    hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    if not hostname:
+        print("❌ Webhook setup failed: No hostname.")
+        return
+    url = f"https://{hostname}/{TOKEN}"
+    updater.bot.set_webhook(url)
+    print("✅ Webhook set:", url)
+
+if __name__ == "__main__":
+    Thread(target=run).start()
+    set_webhook()    print("Webhook set:", success)
 
 updater.bot.set_webhook(APP_URL + "/" + TOKEN)
+
+updater.idle()
 
 # Set webhook URL
 updater.bot.set_webhook(
