@@ -95,10 +95,13 @@ dispatcher.add_handler(CommandHandler("ban", ban_cmd))
 dispatcher.add_handler(CommandHandler("suspend", suspend_cmd))
 
 # --- WEBHOOK HANDLER ---
+from telegram import Update
+
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    updater.bot.process_new_updates([
-        telegram.Update.de_json(request.get_json(force=True), updater.bot)
+    update = Update.de_json(request.get_json(force=True), updater.bot)
+    dispatcher.process_update(update)
+    return "ok"telegram.Update.de_json(request.get_json(force=True), updater.bot)
     ])
     return "ok"
 
