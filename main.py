@@ -2,39 +2,178 @@ import os
 from flask import Flask, request
 from threading import Thread
 from telegram import Update, ChatPermissions
-from telegram.ext import Updater, CommandHandler, CallbackContext
-import telegram
+from telegram.ext import (
+    Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+)
 
-# --- CONFIG ---
-TOKEN = os.getenv("BOT_TOKEN") or "8123613122:AAEWLMbOSMJEoW1VVlDTfaBTG-ec6cf_PoQ"
-ADMIN_ID = 6871731402
-PORT = int(os.environ.get("PORT", 8080))
+TOKEN = os.getenv("BOT_TOKEN")
+APP_URL = os.getenv("APP_URL")  # e.g. https://your-app-name.onrender.com
 
-# Whitelist/Blacklist in memory (use database in production)
-whitelist = set()
-blacklist = set()
-
-# --- FLASK SERVER ---
 app = Flask(__name__)
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
-# --- COMMANDS ---
+ADMIN_ID = 6871731402  # Your Telegram ID
+
+whitelist = set()
+blacklist = set()
+awaiting_command = {}  # user_id: command
+spam_tracker = {}  # user_id: offense_count
+
+# --- Admin-only check ---
+def admin_only(func):
+    def wrapper(update: Update, context: CallbackContext):
+        if update.effective_user.id != ADMIN_ID:
+            update.message.reply_text("🚫 You don't have permission to use this.")
+            return
+        return func(update, context)
+    return wrapper
+
+# --- Command base ---
+def ask_for_target(update: Update, context: CallbackContext, command: str):
+    update.message.reply_text(f"Who do you want to {command}? Tag or reply to the user.")
+    awaiting_command[update.effective_user.id] = command
+
+# --- Admin Commands ---
+@admin_only
 def start(update: Update, context: CallbackContext):
-    update.message.reply_text("🤖 Spam Bot is active. Use /whitelist, /blacklist etc.")
+    update.message.reply_text("✅ Anti-spam bot is live!")
 
+@admin_only
 def whitelist_cmd(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return update.message.reply_text("❌ You're not authorized.")
-    try:
-        user_id = int(context.args[0])
-        whitelist.add(user_id)
-        update.message.reply_text(f"✅ Whitelisted user: {user_id}")
-    except:
-        update.message.reply_text("❌ Usage: /whitelist <user_id>")
+    ask_for_target(update, context, "whitelist")
 
+@admin_only
 def blacklist_cmd(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
+    ask_for_target(update, context, "blacklist")
+
+@admin_only
+def unlist_cmd(update: Update, context: CallbackContext):
+    ask_for_target(update, context, "unlist")
+
+@admin_only
+def ban_cmd(update: Update, context: CallbackContext):
+    ask_for_target(update, context, "ban")
+
+@admin_only
+def remove_cmd(update: Update, context: CallbackContext):
+    ask_for_target(update, context, "remove")
+
+@admin_only
+def suspend_cmd(update: Update, context: CallbackContext):
+    ask_for_target(update, context, "suspend")
+
+def apply_action(update: Update, context: CallbackContext):
+    from_user = update.effective_user.id
+    if from_user not in awaiting_command:
+        return
+
+    command = awaiting_command.pop(from_user)
+    target_user = (
+        update.message.reply_to_message.from_user
+        if update.message.reply_to_message else update.message.entities[1].user
+        if update.message.entities and len(update.message.entities) > 1 else None
+    )
+
+    if not target_user:
+        update.message.reply_text("⚠️ Please reply to or mention a valid user.")
+        return
+
+    uid = target_user.id
+
+    if command == "whitelist":
+        whitelist.add(uid)
+        blacklist.discard(uid)
+        update.message.reply_text(f"✅ Whitelisted {target_user.full_name}")
+    elif command == "blacklist":
+        blacklist.add(uid)
+        whitelist.discard(uid)
+        update.message.reply_text(f"🚫 Blacklisted {target_user.full_name}")
+    elif command == "unlist":
+        whitelist.discard(uid)
+        blacklist.discard(uid)
+        update.message.reply_text(f"❌ Removed {target_user.full_name} from all lists.")
+    elif command == "ban":
+        context.bot.kick_chat_member(update.effective_chat.id, uid)
+        update.message.reply_text(f"🔨 Banned {target_user.full_name}")
+    elif command == "remove":
+        context.bot.kick_chat_member(update.effective_chat.id, uid)
+        context.bot.unban_chat_member(update.effective_chat.id, uid)
+        update.message.reply_text(f"👢 Removed {target_user.full_name}")
+    elif command == "suspend":
+        perms = ChatPermissions(can_send_messages=False)
+        context.bot.restrict_chat_member(update.effective_chat.id, uid, permissions=perms)
+        update.message.reply_text(f"🚷 Suspended {target_user.full_name}")
+
+# --- Anti-spam logic ---
+def is_spam(message):
+    if message.forward_date:
+        return True
+    if "http://" in message.text or "https://" in message.text or "t.me/" in message.text:
+        return True
+    if message.from_user.username and any(char.isdigit() for char in message.from_user.username):
+        return True
+    return False
+
+def handle_message(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    # Handle interactive command targeting
+    if user_id in awaiting_command:
+        apply_action(update, context)
+        return
+
+    # Skip whitelisted or admin
+    if user_id in whitelist or user_id == ADMIN_ID:
+        return
+
+    # Detect spam
+    if is_spam(update.message):
+        update.message.delete()
+        spam_tracker[user_id] = spam_tracker.get(user_id, 0) + 1
+
+        if spam_tracker[user_id] >= 5:
+            context.bot.kick_chat_member(chat_id, user_id)
+            context.bot.send_message(chat_id, f"🚫 User {update.effective_user.full_name} removed for spamming.")
+            spam_tracker.pop(user_id)
+        else:
+            remaining = 5 - spam_tracker[user_id]
+            context.bot.send_message(chat_id, f"⚠️ Spam detected. {remaining} strike(s) left before removal.")
+
+# --- Flask routes ---
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), updater.bot)
+    dispatcher.process_update(update)
+    return "ok"
+
+@app.route("/")
+def index():
+    return "Bot is alive."
+
+def run():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+def set_webhook():
+    url = f"{APP_URL}/{TOKEN}"
+    success = updater.bot.set_webhook(url)
+    print("Webhook set:", success)
+
+# --- Register handlers ---
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("whitelist", whitelist_cmd))
+dispatcher.add_handler(CommandHandler("blacklist", blacklist_cmd))
+dispatcher.add_handler(CommandHandler("unlist", unlist_cmd))
+dispatcher.add_handler(CommandHandler("ban", ban_cmd))
+dispatcher.add_handler(CommandHandler("remove", remove_cmd))
+dispatcher.add_handler(CommandHandler("suspend", suspend_cmd))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+# --- Main ---
+if __name__ == "__main__":
+    Thread(target=run).start()
+    set_webhook()    if update.effective_user.id != ADMIN_ID:
         return update.message.reply_text("❌ You're not authorized.")
     try:
         user_id = int(context.args[0])
