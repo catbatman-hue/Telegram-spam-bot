@@ -262,5 +262,67 @@ def main():
     updater.start_polling()
     updater.idle()
 
+# ========= Command logic (paste after dispatcher setup) =========
+
+# In-memory sets
+whitelist_users = set()
+blacklist_users = set()
+
+# Your Telegram ID (admin only)
+ADMINS = {6871731402}  # Add more admin IDs if needed
+
+def is_admin(user_id):
+    return user_id in ADMINS
+
+def start(update, context):
+    update.message.reply_text("✅ Webhook bot is live!")
+
+def getuid(update, context):
+    user_id = update.message.from_user.id
+    update.message.reply_text(f"🆔 Your Telegram ID is: `{user_id}`", parse_mode="Markdown")
+
+def whitelist(update, context):
+    if not is_admin(update.effective_user.id):
+        return update.message.reply_text("🚫 You're not authorized.")
+    if not context.args:
+        return update.message.reply_text("⚠️ Usage: /whitelist <user_id>")
+    user_id = int(context.args[0])
+    whitelist_users.add(user_id)
+    blacklist_users.discard(user_id)
+    update.message.reply_text(f"✅ Whitelisted user `{user_id}`", parse_mode="Markdown")
+
+def blacklist(update, context):
+    if not is_admin(update.effective_user.id):
+        return update.message.reply_text("🚫 You're not authorized.")
+    if not context.args:
+        return update.message.reply_text("⚠️ Usage: /blacklist <user_id>")
+    user_id = int(context.args[0])
+    blacklist_users.add(user_id)
+    whitelist_users.discard(user_id)
+    update.message.reply_text(f"❌ Blacklisted user `{user_id}`", parse_mode="Markdown")
+
+def unlist(update, context):
+    if not is_admin(update.effective_user.id):
+        return update.message.reply_text("🚫 You're not authorized.")
+    if not context.args:
+        return update.message.reply_text("⚠️ Usage: /unlist <user_id>")
+    user_id = int(context.args[0])
+    whitelist_users.discard(user_id)
+    blacklist_users.discard(user_id)
+    update.message.reply_text(f"🗑️ Removed user `{user_id}` from all lists", parse_mode="Markdown")
+
+# Aliases
+ban = suspend = removed = unlist
+
+# Register handlers
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("getuid", getuid))
+dispatcher.add_handler(CommandHandler("whitelist", whitelist))
+dispatcher.add_handler(CommandHandler("blacklist", blacklist))
+dispatcher.add_handler(CommandHandler("unlist", unlist))
+dispatcher.add_handler(CommandHandler("ban", ban))
+dispatcher.add_handler(CommandHandler("suspend", suspend))
+dispatcher.add_handler(CommandHandler("removed", removed))
+
 if __name__ == '__main__':
     main()
