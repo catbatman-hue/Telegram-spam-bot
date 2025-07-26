@@ -278,8 +278,9 @@ def start(update, context):
     update.message.reply_text("✅ Webhook bot is live!")
 
 def getuid(update, context):
-    user_id = update.message.from_user.id
-    update.message.reply_text(f"🆔 Your Telegram ID is: `{user_id}`", parse_mode="Markdown")
+    user = update.effective_user
+    print(f"[LOG] /getuid requested by: {user.username} (ID: {user.id})")
+    update.message.reply_text(f"🆔 Your Telegram ID is: {user.id}")
 
 def whitelist(update, context):
     if not is_admin(update.effective_user.id):
