@@ -6,14 +6,14 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 import logging
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "6871731402"))  # Your Telegram ID
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6871731402"))
 PORT = int(os.environ.get("PORT", 10000))
 
-# Memory store
+# In-memory stores
 whitelist = set()
 blacklist = set()
 spam_count = {}
-pending_action = {}  # Tracks admin reply waiting
+pending_action = {}
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -23,66 +23,111 @@ app = Flask(__name__)
 updater = Updater(TOKEN, use_context=True)
 dispatcher = updater.dispatcher
 
-# Admin check
+# Helper: check admin
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
-# Command starter
-def request_target(update: Update, context: CallbackContext, action: str):
+# Start
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text("🤖 Bot is live and ready.")
+
+# Command prep
+def request_target(update: Update, context: CallbackContext, command: str):
     if not is_admin(update.effective_user.id):
         return update.message.reply_text("❌ You're not authorized.")
-    pending_action[update.effective_user.id] = action
-    update.message.reply_text(f"Please reply to the user you want to *{action}*", parse_mode="Markdown")
+    pending_action[update.effective_user.id] = command
+    update.message.reply_text(f"🕵️ Please *reply* to the user you want to `{command}`", parse_mode="Markdown")
 
-# Reply handler
-def perform_action(update: Update, context: CallbackContext):
+# Handle reply
+def handle_reply(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id not in pending_action:
         return
-    action = pending_action.pop(user_id)
+    command = pending_action.pop(user_id)
+
     if not update.message.reply_to_message:
-        return update.message.reply_text("❌ You must reply to a user's message.")
+        return update.message.reply_text("❌ You must reply to the user's message.")
 
     target = update.message.reply_to_message.from_user
     tid = target.id
 
-    if action == "whitelist":
+    if command == "whitelist":
         whitelist.add(tid)
-        update.message.reply_text(f"✅ {target.first_name} whitelisted.")
-    elif action == "blacklist":
+        update.message.reply_text(f"✅ {target.first_name} added to whitelist.")
+    elif command == "blacklist":
         blacklist.add(tid)
-        update.message.reply_text(f"⚠️ {target.first_name} blacklisted.")
-    elif action == "unlist":
+        update.message.reply_text(f"⚠️ {target.first_name} added to blacklist.")
+    elif command == "unlist":
         whitelist.discard(tid)
         blacklist.discard(tid)
         update.message.reply_text(f"✅ {target.first_name} removed from all lists.")
-    elif action == "ban":
-        try:
-            context.bot.kick_chat_member(update.effective_chat.id, tid)
-            update.message.reply_text(f"🚫 {target.first_name} banned.")
-        except Exception as e:
-            update.message.reply_text(f"❌ Ban failed: {e}")
-    elif action == "suspend":
-        try:
-            context.bot.restrict_chat_member(update.effective_chat.id, tid, ChatPermissions(can_send_messages=False))
-            update.message.reply_text(f"⛔ {target.first_name} suspended.")
-        except Exception as e:
-            update.message.reply_text(f"❌ Suspend failed: {e}")
-    elif action == "removed":
-        try:
-            context.bot.kick_chat_member(update.effective_chat.id, tid)
-            update.message.reply_text(f"❌ {target.first_name} removed.")
-        except Exception as e:
-            update.message.reply_text(f"❌ Remove failed: {e}")
+    elif command == "ban":
+        context.bot.kick_chat_member(update.effective_chat.id, tid)
+        update.message.reply_text(f"🚫 {target.first_name} has been banned.")
+    elif command == "suspend":
+        context.bot.restrict_chat_member(update.effective_chat.id, tid, ChatPermissions(can_send_messages=False))
+        update.message.reply_text(f"⛔ {target.first_name} has been suspended.")
+    elif command == "removed":
+        context.bot.kick_chat_member(update.effective_chat.id, tid)
+        update.message.reply_text(f"🗑️ {target.first_name} removed from group.")
 
-# Spam monitor
-def handle_spam(update: Update, context: CallbackContext):
+# Spam detection
+def monitor_spam(update: Update, context: CallbackContext):
     user = update.effective_user
     if user.id in whitelist:
         return
-    text = update.message.text.lower()
-    if update.message.forward_from or "http" in text or "www" in text:
+
+    message = update.message
+    text = message.text or ""
+
+    if message.forward_from or "http" in text or "www" in text:
         spam_count[user.id] = spam_count.get(user.id, 0) + 1
+        count = spam_count[user.id]
+
+        try:
+            message.delete()
+        except:
+            pass
+
+        if count >= 5:
+            try:
+                context.bot.kick_chat_member(update.effective_chat.id, user.id)
+                update.message.reply_text(f"🚷 {user.first_name} removed for spam (5/5).")
+            except:
+                pass
+        else:
+            update.message.reply_text(f"⚠️ Spam detected! Warning {count}/5.")
+
+# Handlers
+dispatcher.add_handler(CommandHandler("start", start))
+for cmd in ["whitelist", "blacklist", "unlist", "ban", "suspend", "removed"]:
+    dispatcher.add_handler(CommandHandler(cmd, lambda u, c, cmd=cmd: request_target(u, c, cmd)))
+dispatcher.add_handler(MessageHandler(Filters.reply & Filters.group, handle_reply))
+dispatcher.add_handler(MessageHandler(Filters.text & Filters.group, monitor_spam))
+
+# Flask app
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), updater.bot)
+    dispatcher.process_update(update)
+    return "ok"
+
+@app.route("/")
+def index():
+    return "✅ Bot running."
+
+def run():
+    app.run(host="0.0.0.0", port=PORT)
+
+def set_webhook():
+    print("Setting webhook...")
+    url = os.getenv("APP_URL") or f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
+    success = updater.bot.set_webhook(url)
+    print("Webhook set:", success)
+
+if __name__ == "__main__":
+    Thread(target=run).start()
+    set_webhook()        spam_count[user.id] = spam_count.get(user.id, 0) + 1
         count = spam_count[user.id]
 
         try:
