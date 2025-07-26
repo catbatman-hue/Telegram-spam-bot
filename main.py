@@ -127,7 +127,8 @@ if __name__ == "__main__":
     success = set_webhook()
     print("Webhook set:", success)
 
-updater.bot.set_webhook(APP_URL + "/" + TOKEN)
+app_url = os.getenv("APP_URL") or f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
+updater.bot.set_webhook(app_url + "/" + TOKEN)
 
 updater.idle()
 
